@@ -6,6 +6,8 @@ Compresses an MP4 video file using ffmpeg.
 This script takes an input MP4 file and compresses it using ffmpeg,
 employing the H.264 codec (libx264) with a specified Constant Rate Factor (CRF)
 and encoding preset. It saves the output file with a suffix (e.g., "_compressed").
+If a "compressedVideos" folder exists in the same directory as the input video,
+the compressed video will be saved there. If the folder does not exist, it will be created.
 ffmpeg must be installed and accessible via the system PATH.
 Uses -LiteralPath for increased robustness with filenames containing special characters.
 
@@ -51,7 +53,7 @@ Defaults to '128k'.
 
 .NOTES
 Author: AI Assistant
-Version: 1.1 (Added -LiteralPath)
+Version: 1.2 (Added "compressedVideos" folder handling)
 LastModified: 2025-05-02
 Requires: ffmpeg installed and in system PATH.
 Ensure your PowerShell Execution Policy allows running local scripts.
@@ -111,9 +113,24 @@ catch {
     return
 }
 
-# Construct the output path
+# Construct the output directory
+$outputDir = Join-Path -Path $inputFileObject.DirectoryName -ChildPath "compressedVideos"
+
+# Check if the directory exists, and create it if it doesn't
+if (-not (Test-Path -LiteralPath $outputDir -PathType Container)) {
+    try {
+        New-Item -ItemType Directory -Path $outputDir -Force -ErrorAction Stop | Out-Null
+        Write-Verbose "Created directory: '$outputDir'"
+    }
+    catch {
+        Write-Error "Failed to create output directory '$outputDir'. Error: $($_.Exception.Message)"
+        return # Stop script execution.  Crucial:  Don't proceed if we can't create the dir.
+    }
+}
+
+# Construct the output file path
 $outputFileName = "$($inputFileObject.BaseName)$($OutputSuffix)$($inputFileObject.Extension)"
-$outputFilePath = Join-Path -Path $inputFileObject.DirectoryName -ChildPath $outputFileName
+$outputFilePath = Join-Path -Path $outputDir -ChildPath $outputFileName
 
 # Check if output file already exists (optional: add overwrite confirmation)
 if (Test-Path -LiteralPath $outputFilePath) {
