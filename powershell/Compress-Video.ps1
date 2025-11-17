@@ -40,8 +40,9 @@ Defaults to 23 (balanced quality). NOT used with CPU encoding.
 .PARAMETER Preset
 Encoding speed preset.
 CPU (libx264): ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-GPU (NVENC/AMF): fast, medium, slow (quality presets)
-Defaults to 'slower' for CPU, 'slow' for GPU.
+NVIDIA (NVENC): p1-p7 or fast, medium, slow (p7/slow = best quality)
+AMD (AMF): speed, balanced, quality (quality = best)
+Defaults to 'slower' for CPU, 'slow' for NVIDIA, 'quality' for AMD.
 
 .PARAMETER Bitrate
 Target video bitrate for GPU encoding (e.g., '5M', '10M').
@@ -191,14 +192,49 @@ if ([string]::IsNullOrEmpty($Preset)) {
     if ($encodingMode -eq 'CPU') {
         $Preset = 'slower'
     }
+    elseif ($encodingMode -eq 'NVIDIA') {
+        $Preset = 'slow'  # NVIDIA preset (p7 equivalent, best quality)
+    }
     else {
-        $Preset = 'slow'  # GPU preset (quality-focused)
+        $Preset = 'quality'  # AMD preset (best quality)
     }
 }
 
-# Validate preset for GPU encoding
-if (($UseNVIDIA -or $UseAMD) -and $Preset -notin @('fast', 'medium', 'slow', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7')) {
-    Write-Warning "Preset '$Preset' may not be optimal for GPU encoding. Recommended: fast, medium, or slow"
+# Validate and map presets for GPU encoding
+if ($UseAMD) {
+    # AMD AMF only accepts: speed, balanced, quality
+    $validAMDPresets = @('speed', 'balanced', 'quality')
+    if ($Preset -notin $validAMDPresets) {
+        Write-Warning "Preset '$Preset' not valid for AMD AMF. Valid options: speed, balanced, quality"
+        Write-Host "Mapping to AMD equivalent..." -ForegroundColor Yellow
+        
+        # Map common presets to AMD equivalents
+        switch -Regex ($Preset) {
+            'fast|faster|veryfast|superfast|ultrafast' { $Preset = 'speed' }
+            'medium' { $Preset = 'balanced' }
+            'slow|slower|veryslow' { $Preset = 'quality' }
+            default { $Preset = 'quality' }
+        }
+        Write-Host "Using AMD preset: $Preset" -ForegroundColor Green
+    }
+}
+elseif ($UseNVIDIA) {
+    # NVIDIA NVENC accepts: p1-p7 or fast, medium, slow, plus legacy presets
+    $validNVIDIAPresets = @('fast', 'medium', 'slow', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 
+        'default', 'hp', 'hq', 'll', 'llhp', 'llhq', 'lossless', 'losslesshp')
+    if ($Preset -notin $validNVIDIAPresets) {
+        Write-Warning "Preset '$Preset' not optimal for NVIDIA NVENC. Recommended: p1-p7, fast, medium, or slow"
+        Write-Host "Mapping to NVIDIA equivalent..." -ForegroundColor Yellow
+        
+        # Map CPU presets to NVIDIA equivalents
+        switch -Regex ($Preset) {
+            'ultrafast|superfast|veryfast' { $Preset = 'fast' }
+            'faster' { $Preset = 'medium' }
+            'slow|slower|veryslow' { $Preset = 'slow' }  # or 'p7' for max quality
+            default { $Preset = 'medium' }
+        }
+        Write-Host "Using NVIDIA preset: $Preset" -ForegroundColor Green
+    }
 }
 
 # Define supported video file extensions
@@ -362,7 +398,7 @@ foreach ($inputFileObject in $inputFileList) {
 
         if ($LASTEXITCODE -eq 0) {
             Write-Host "`n========================================" -ForegroundColor Green
-            Write-Host " Success! Completed in $elapsedTime" -ForegroundColor Green
+            Write-Host "✓ Success! Completed in $elapsedTime" -ForegroundColor Green
             Write-Host "========================================" -ForegroundColor Green
             Write-Host "Output: $outputFilePath" -ForegroundColor White
             
