@@ -1,215 +1,391 @@
 ﻿<#
 .SYNOPSIS
-Compresses video files using ffmpeg.  Handles both single files and directories.
+Compresses video files using ffmpeg with optional NVIDIA or AMD hardware acceleration.
 
 .DESCRIPTION
-This script takes an input video file or a directory path and compresses the video(s)
-using ffmpeg.  It employs the H.264 codec (libx264) with a specified Constant Rate Factor (CRF)
-and encoding preset.  It saves the output file(s) with a suffix (e.g., "_compressed").
-If a "compressedVideos" folder exists in the same directory as the input video(s),
-the compressed video(s) will be saved there. If the folder does not exist, it will be created.
-If a directory is provided as input, the script will process all supported video files in the
-*first level* of that directory.  It does *not* recurse into subdirectories.
-ffmpeg must be installed and accessible via the system PATH.
-Uses -LiteralPath for increased robustness with filenames containing special characters.
+This script compresses video files using ffmpeg with support for:
+- CPU encoding (default - libx264)
+- NVIDIA GPU acceleration (NVENC - h264_nvenc)
+- AMD GPU acceleration (AMF - h264_amf)
+
+Hardware acceleration is disabled by default. Use -UseNVIDIA or -UseAMD flags to enable.
+The script handles both single files and directories (first level only).
+Compressed videos are saved to a "compressedVideos" subfolder.
 
 .PARAMETER InputFilePath
-The full path to the input video file or a directory containing video files.
-Provide the path accurately, using quotes around it during execution if it
-contains spaces or special characters. (Mandatory)
+The full path to the input video file or directory containing video files. (Mandatory)
+
+.PARAMETER UseNVIDIA
+Switch to enable NVIDIA GPU hardware acceleration using NVENC encoder.
+Requires compatible NVIDIA GPU with NVENC support.
+
+.PARAMETER UseAMD
+Switch to enable AMD GPU hardware acceleration using AMF encoder.
+Requires compatible AMD GPU with AMF support.
 
 .PARAMETER OutputSuffix
-A string to append to the original filename (before the extension) for the output file.
+String to append to the original filename (before extension) for the output file.
 Defaults to '_compressed'.
 
 .PARAMETER CRF
-The Constant Rate Factor (quality level). Lower values mean higher quality and larger files.
-Higher values mean lower quality and smaller files. A range of 18-28 is common for H.264.
-Defaults to 24.
+Constant Rate Factor (quality level) for CPU encoding only.
+Lower values = higher quality/larger files. Range: 17-51.
+Defaults to 18 (high quality). NOT used with GPU encoding.
+
+.PARAMETER QP
+Quantization Parameter for GPU encoding (NVIDIA/AMD).
+Lower values = higher quality/larger files. Range: 0-51.
+Defaults to 23 (balanced quality). NOT used with CPU encoding.
 
 .PARAMETER Preset
-The encoding speed preset. Slower presets provide better compression for the same CRF
-but take longer to encode. Options: ultrafast, superfast, veryfast, faster, fast,
-medium, slow, slower, veryslow.
-Defaults to 'medium'.
+Encoding speed preset.
+CPU (libx264): ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+GPU (NVENC/AMF): fast, medium, slow (quality presets)
+Defaults to 'slower' for CPU, 'slow' for GPU.
+
+.PARAMETER Bitrate
+Target video bitrate for GPU encoding (e.g., '5M', '10M').
+Optional - uses QP-based encoding if not specified.
 
 .PARAMETER AudioBitrate
-The target bitrate for the audio stream (e.g., '128k', '192k').
+Target bitrate for the audio stream (e.g., '128k', '192k').
 Defaults to '128k'.
 
-.EXAMPLE
-# Simple execution with space in path (file)
-.\Compress-Video.ps1 -InputFilePath "C:\My Videos\Holiday Footage.mp4"
+.PARAMETER EnableHWAccelDecode
+Switch to enable hardware-accelerated decoding (keeps frames in GPU memory).
+Only applicable when using -UseNVIDIA or -UseAMD.
+Recommended for best performance with GPU encoding.
 
 .EXAMPLE
-# Simple execution with space in path (directory)
-.\Compress-Video.ps1 -InputFilePath "C:\My Videos\"
+# CPU encoding (default, high quality)
+.\Compress-Video.ps1 -InputFilePath "C:\Videos\sample.mp4"
 
 .EXAMPLE
-# Custom settings and output suffix
-.\Compress-Video.ps1 -InputFilePath 'C:\Movies\Action Scene.mp4' -CRF 26 -Preset slow -OutputSuffix "_web_optimized"
+# NVIDIA GPU encoding with hardware decode
+.\Compress-Video.ps1 -InputFilePath "C:\Videos\sample.mp4" -UseNVIDIA -EnableHWAccelDecode
 
 .EXAMPLE
-# Handling path with single quote
-.\Compress-Video.ps1 -InputFilePath "C:\Recordings\Meeting 'Important'.mp4"
+# AMD GPU encoding with custom QP
+.\Compress-Video.ps1 -InputFilePath "C:\Videos\" -UseAMD -QP 20 -EnableHWAccelDecode
 
 .EXAMPLE
-# Handling path with literal double quotes (use doubled quotes "" or outer single quotes ') - RENAMING THE FILE IS RECOMMENDED!
-.\Compress-Video.ps1 -InputFilePath "C:\Misc\My ""Quoted"" File.mp4"
-.\Compress-Video.ps1 -InputFilePath 'C:\Misc\My "Quoted" File.mp4'
+# NVIDIA GPU with bitrate control
+.\Compress-Video.ps1 -InputFilePath "C:\Videos\sample.mp4" -UseNVIDIA -Bitrate "10M" -Preset medium
+
+.EXAMPLE
+# CPU encoding with custom CRF and preset
+.\Compress-Video.ps1 -InputFilePath "C:\Videos\sample.mp4" -CRF 20 -Preset medium
 
 .NOTES
-Author: AI Assistant
-Version: 1.4 (Added support for multiple video file extensions)
-LastModified: 2025-05-02
-Requires: ffmpeg installed and in system PATH.
-Ensure your PowerShell Execution Policy allows running local scripts.
-(e.g., Set-ExecutionPolicy RemoteSigned -Scope CurrentUser)
-If the filename itself contains literal double quotes ("), renaming is the most reliable solution.
+Author: AI Assistant (Enhanced)
+Version: 2.0 (Added NVIDIA NVENC and AMD AMF hardware acceleration support)
+LastModified: 2025-11-17
+Requires: 
+  - ffmpeg installed and in system PATH
+  - For NVIDIA: Compatible GPU with NVENC support (Kepler or newer)
+  - For AMD: Compatible GPU with AMF support (GCN or newer)
+Execution Policy: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+Hardware Acceleration Notes:
+- NVIDIA NVENC: Uses dedicated hardware encoder, significantly faster than CPU
+- AMD AMF: Uses GPU encoder, faster than CPU with lower CPU usage
+- GPU encoders produce slightly larger files than CPU for same quality
+- Hardware decode (-EnableHWAccelDecode) keeps frames in GPU memory for best performance
+- QP values for GPU: 0 = lossless (huge files), 18-23 = high quality, 28+ = lower quality
 #>
+
 param(
-    [Parameter(Mandatory=$true, HelpMessage="Path to the input video file or directory containing video files.")]
+    [Parameter(Mandatory = $true, HelpMessage = "Path to the input video file or directory.")]
     [string]$InputFilePath,
 
-    [Parameter(HelpMessage="Suffix for the output filename (before extension).")]
+    [Parameter(HelpMessage = "Enable NVIDIA GPU hardware acceleration (NVENC).")]
+    [switch]$UseNVIDIA,
+
+    [Parameter(HelpMessage = "Enable AMD GPU hardware acceleration (AMF).")]
+    [switch]$UseAMD,
+
+    [Parameter(HelpMessage = "Suffix for the output filename (before extension).")]
     [string]$OutputSuffix = '_compressed',
 
-    [Parameter(HelpMessage="Constant Rate Factor (18-28 common). Lower=Higher Quality/Size.")]
-    [ValidateRange(17, 51)] # ffmpeg's range for libx264 CRF
+    [Parameter(HelpMessage = "Constant Rate Factor for CPU encoding (17-51). Lower=Higher Quality.")]
+    [ValidateRange(17, 51)]
     [int]$CRF = 18,
 
-    [Parameter(HelpMessage="Encoding speed preset. Slower=Better Compression/Slower Speed.")]
-    [ValidateSet('ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow')]
-    [string]$Preset = 'slower',
+    [Parameter(HelpMessage = "Quantization Parameter for GPU encoding (0-51). Lower=Higher Quality.")]
+    [ValidateRange(0, 51)]
+    [int]$QP = 23,
 
-    [Parameter(HelpMessage="Target audio bitrate (e.g., '128k', '192k').")]
-    [string]$AudioBitrate = '128k'
+    [Parameter(HelpMessage = "Encoding preset. CPU: ultrafast to veryslow. GPU: fast, medium, slow.")]
+    [string]$Preset = '',
+
+    [Parameter(HelpMessage = "Target video bitrate for GPU encoding (e.g., '5M', '10M'). Optional.")]
+    [string]$Bitrate = '',
+
+    [Parameter(HelpMessage = "Target audio bitrate (e.g., '128k', '192k').")]
+    [string]$AudioBitrate = '128k',
+
+    [Parameter(HelpMessage = "Enable hardware-accelerated decoding (GPU only).")]
+    [switch]$EnableHWAccelDecode
 )
 
-# --- 1. Validate Input and Environment ---
+# --- Validation and Setup ---
 
-# Check if input path exists using LiteralPath
-if (-not (Test-Path -LiteralPath $InputFilePath -ErrorAction SilentlyContinue)) {
-    Write-Error "Input path not found (checked literal path): '$InputFilePath'"
-    return # Stop script execution
+# Check for conflicting GPU flags
+if ($UseNVIDIA -and $UseAMD) {
+    Write-Error "Cannot use both -UseNVIDIA and -UseAMD flags simultaneously. Choose one."
+    return
 }
 
-# Check if ffmpeg command is available
+# Validate input path
+if (-not (Test-Path -LiteralPath $InputFilePath -ErrorAction SilentlyContinue)) {
+    Write-Error "Input path not found: '$InputFilePath'"
+    return
+}
+
+# Check if ffmpeg is available
 try {
-    Get-Command ffmpeg -ErrorAction Stop | Out-Null
-    Write-Verbose "ffmpeg command found in PATH."
+    $ffmpegVersion = & ffmpeg -version 2>&1 | Select-Object -First 1
+    Write-Verbose "Found: $ffmpegVersion"
 }
 catch {
-    Write-Error "ffmpeg command not found in PATH. Please install ffmpeg and ensure it's added to your system's PATH environment variable."
-    return # Stop script execution
+    Write-Error "ffmpeg not found in PATH. Please install ffmpeg and add it to your system PATH."
+    return
 }
 
-# --- 2. Process Input Path ---
-$inputFileList = @()  # Initialize an empty array to store files to process
+# Determine encoding mode and validate encoder availability
+$encodingMode = 'CPU'
+$videoCodec = 'libx264'
+
+if ($UseNVIDIA) {
+    $encodingMode = 'NVIDIA'
+    $videoCodec = 'h264_nvenc'
+    
+    # Check if NVENC encoder is available
+    $encoders = & ffmpeg -encoders 2>&1 | Out-String
+    if ($encoders -notmatch 'h264_nvenc') {
+        Write-Error "NVIDIA NVENC encoder (h264_nvenc) not found in ffmpeg. Your ffmpeg build may not support NVENC."
+        Write-Host "To check available encoders, run: ffmpeg -encoders | findstr nvenc"
+        return
+    }
+    Write-Host "NVIDIA GPU acceleration enabled (NVENC)" -ForegroundColor Green
+}
+elseif ($UseAMD) {
+    $encodingMode = 'AMD'
+    $videoCodec = 'h264_amf'
+    
+    # Check if AMF encoder is available
+    $encoders = & ffmpeg -encoders 2>&1 | Out-String
+    if ($encoders -notmatch 'h264_amf') {
+        Write-Error "AMD AMF encoder (h264_amf) not found in ffmpeg. Your ffmpeg build may not support AMF."
+        Write-Host "To check available encoders, run: ffmpeg -encoders | findstr amf"
+        return
+    }
+    Write-Host "AMD GPU acceleration enabled (AMF)" -ForegroundColor Green
+}
+else {
+    Write-Host "CPU encoding enabled (libx264)" -ForegroundColor Cyan
+}
+
+# Set default preset based on encoding mode
+if ([string]::IsNullOrEmpty($Preset)) {
+    if ($encodingMode -eq 'CPU') {
+        $Preset = 'slower'
+    }
+    else {
+        $Preset = 'slow'  # GPU preset (quality-focused)
+    }
+}
+
+# Validate preset for GPU encoding
+if (($UseNVIDIA -or $UseAMD) -and $Preset -notin @('fast', 'medium', 'slow', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7')) {
+    Write-Warning "Preset '$Preset' may not be optimal for GPU encoding. Recommended: fast, medium, or slow"
+}
 
 # Define supported video file extensions
-$supportedExtensions = @('.mp4', '.mkv', '.mov', '.avi', '.wmv', '.flv') # Add more if needed
+$supportedExtensions = @('.mp4', '.mkv', '.mov', '.avi', '.wmv', '.flv', '.webm', '.m4v')
 
-# Determine if the input path is a file or a directory
+# --- Build File List ---
+$inputFileList = @()
+
 if ((Get-Item -LiteralPath $InputFilePath).PSIsContainer) {
-    # Input is a directory.  Get all supported video files in the *first level* only.
-    Write-Verbose "Input path is a directory: '$InputFilePath'"
-    try {
-        # Use a loop to check for each supported extension
-        foreach ($extension in $supportedExtensions) {
-            $inputFileList += Get-ChildItem -LiteralPath $InputFilePath -Filter "*$extension" -File -ErrorAction SilentlyContinue
-        }
-        if ($inputFileList.Count -eq 0) {
-            Write-Warning "No supported video files found in directory: '$InputFilePath'"
-            return # Stop if no supported files found
-        }
+    Write-Verbose "Processing directory: '$InputFilePath'"
+    foreach ($extension in $supportedExtensions) {
+        $inputFileList += Get-ChildItem -LiteralPath $InputFilePath -Filter "*$extension" -File -ErrorAction SilentlyContinue
     }
-    catch {
-        Write-Error "Error getting video files from directory '$InputFilePath': $($_.Exception.Message)"
+    if ($inputFileList.Count -eq 0) {
+        Write-Warning "No supported video files found in: '$InputFilePath'"
         return
     }
-} else {
-    # Input is a single file.
-    Write-Verbose "Input path is a file: '$InputFilePath'"
+}
+else {
+    Write-Verbose "Processing single file: '$InputFilePath'"
     $inputFile = Get-Item -LiteralPath $InputFilePath
-    # Check if the file extension is supported
     if ($supportedExtensions -contains $inputFile.Extension.ToLower()) {
-        $inputFileList += $inputFile # Add the file to the array
+        $inputFileList += $inputFile
     }
-    else{
-        Write-Warning "The input file '$InputFilePath' is not a supported video file type. Supported types are: $($supportedExtensions -join ', ')"
+    else {
+        Write-Warning "File type not supported: '$($inputFile.Extension)'. Supported: $($supportedExtensions -join ', ')"
         return
     }
 }
 
-# --- 3. Process Each Input File ---
+# --- Process Each File ---
 foreach ($inputFileObject in $inputFileList) {
-    # Construct the output directory
-    $outputDir = Join-Path -Path $inputFileObject.DirectoryName -ChildPath "compressedVideos"
+    Write-Host "`n========================================" -ForegroundColor Yellow
+    Write-Host "Processing: $($inputFileObject.Name)" -ForegroundColor Yellow
+    Write-Host "========================================" -ForegroundColor Yellow
 
-    # Check if the directory exists, and create it if it doesn't
+    # Create output directory
+    $outputDir = Join-Path -Path $inputFileObject.DirectoryName -ChildPath "compressedVideos"
     if (-not (Test-Path -LiteralPath $outputDir -PathType Container)) {
         try {
             New-Item -ItemType Directory -Path $outputDir -Force -ErrorAction Stop | Out-Null
             Write-Verbose "Created directory: '$outputDir'"
         }
         catch {
-            Write-Error "Failed to create output directory '$outputDir'. Error: $($_.Exception.Message)"
-            return # Stop script execution.  Crucial:  Don't proceed if we can't create the dir.
+            Write-Error "Failed to create output directory: $($_.Exception.Message)"
+            return
         }
     }
 
-    # Construct the output file path
+    # Construct output file path
     $outputFileName = "$($inputFileObject.BaseName)$($OutputSuffix)$($inputFileObject.Extension)"
     $outputFilePath = Join-Path -Path $outputDir -ChildPath $outputFileName
 
-    # Check if output file already exists (optional: add overwrite confirmation)
+    # Check if output exists
     if (Test-Path -LiteralPath $outputFilePath) {
-        Write-Warning "Output file '$outputFilePath' already exists and will be overwritten."
-        # Optional: Prompt user before overwriting
-        # try {
-        #     Read-Host -Prompt "Output file '$outputFilePath' exists. Press ENTER to overwrite or CTRL+C to cancel" | Out-Null
-        # } catch {
-        #     Write-Host "Operation cancelled by user."
-        #     return
-        # }
+        Write-Warning "Output file exists and will be overwritten: '$outputFileName'"
     }
 
-    # --- 4. Construct and Execute ffmpeg Command ---
-    Write-Host "Starting video compression..."
-    Write-Host "Input:      $($inputFileObject.FullName)"
-    Write-Host "Output:     $outputFilePath"
-    Write-Host "Settings:   CRF=$CRF, Preset=$Preset, AudioBitrate=$AudioBitrate"
-    Write-Host "--------------------------------------------------"
+    # --- Build ffmpeg Arguments ---
+    $ffmpegArgs = @()
 
-    # Define arguments for ffmpeg
-    $ffmpegArgs = @(
-        '-i', $inputFileObject.FullName,
-        '-c:v', 'libx264',
-        '-crf', $CRF.ToString(),
-        '-preset', $Preset,
-        '-c:a', 'aac',
-        '-b:a', $AudioBitrate,
-        '-movflags', '+faststart',
-        $outputFilePath
-    )
+    # Hardware-accelerated decoding (if enabled for GPU encoding)
+    if ($EnableHWAccelDecode) {
+        if ($UseNVIDIA) {
+            # NVIDIA: Use CUDA hardware acceleration for decoding
+            $ffmpegArgs += '-hwaccel', 'cuda'
+            $ffmpegArgs += '-hwaccel_output_format', 'cuda'
+            Write-Host "Hardware decode: CUDA (NVDEC)" -ForegroundColor Green
+        }
+        elseif ($UseAMD) {
+            # AMD: Use D3D11VA for Windows (most compatible)
+            $ffmpegArgs += '-hwaccel', 'd3d11va'
+            $ffmpegArgs += '-hwaccel_output_format', 'd3d11'
+            Write-Host "Hardware decode: D3D11VA (AMD VCN)" -ForegroundColor Green
+        }
+        else {
+            Write-Warning "Hardware decode only available with -UseNVIDIA or -UseAMD"
+        }
+    }
 
-    # Execute ffmpeg
+    # Input file
+    $ffmpegArgs += '-i', $inputFileObject.FullName
+
+    # Video codec and quality settings
+    $ffmpegArgs += '-c:v', $videoCodec
+
+    if ($encodingMode -eq 'CPU') {
+        # CPU encoding with CRF
+        $ffmpegArgs += '-crf', $CRF.ToString()
+        $ffmpegArgs += '-preset', $Preset
+    }
+    else {
+        # GPU encoding
+        $ffmpegArgs += '-preset', $Preset
+        
+        if ([string]::IsNullOrEmpty($Bitrate)) {
+            # Use QP-based quality control (constant quality)
+            if ($UseNVIDIA) {
+                $ffmpegArgs += '-rc', 'constqp'
+                $ffmpegArgs += '-qp', $QP.ToString()
+            }
+            elseif ($UseAMD) {
+                $ffmpegArgs += '-rc', 'cqp'
+                $ffmpegArgs += '-qp_i', $QP.ToString()
+                $ffmpegArgs += '-qp_p', $QP.ToString()
+            }
+        }
+        else {
+            # Use bitrate control (VBR)
+            $ffmpegArgs += '-b:v', $Bitrate
+            if ($UseNVIDIA) {
+                $ffmpegArgs += '-rc', 'vbr'
+            }
+            elseif ($UseAMD) {
+                $ffmpegArgs += '-rc', 'vbr_peak'
+            }
+        }
+    }
+
+    # Audio settings
+    $ffmpegArgs += '-c:a', 'aac'
+    $ffmpegArgs += '-b:a', $AudioBitrate
+
+    # MP4 optimization
+    $ffmpegArgs += '-movflags', '+faststart'
+
+    # Output file
+    $ffmpegArgs += $outputFilePath
+
+    # --- Display Settings ---
+    Write-Host "`nSettings:" -ForegroundColor Cyan
+    Write-Host "  Encoding Mode:  $encodingMode" -ForegroundColor White
+    Write-Host "  Video Codec:    $videoCodec" -ForegroundColor White
+    Write-Host "  Preset:         $Preset" -ForegroundColor White
+    
+    if ($encodingMode -eq 'CPU') {
+        Write-Host "  CRF:            $CRF" -ForegroundColor White
+    }
+    else {
+        if ([string]::IsNullOrEmpty($Bitrate)) {
+            Write-Host "  QP:             $QP (constant quality)" -ForegroundColor White
+        }
+        else {
+            Write-Host "  Bitrate:        $Bitrate (variable bitrate)" -ForegroundColor White
+        }
+    }
+    
+    Write-Host "  Audio Bitrate:  $AudioBitrate" -ForegroundColor White
+    Write-Host "  HW Decode:      $(if ($EnableHWAccelDecode) { 'Enabled' } else { 'Disabled' })" -ForegroundColor White
+    Write-Host ""
+
+    # --- Execute ffmpeg ---
+    Write-Host "Encoding..." -ForegroundColor Yellow
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
     try {
         & ffmpeg $ffmpegArgs
 
-        # Check the exit code
+        $stopwatch.Stop()
+        $elapsedTime = $stopwatch.Elapsed.ToString("mm\:ss")
+
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "--------------------------------------------------"
-            Write-Host "Compression completed successfully!" -ForegroundColor Green
-            Write-Host "Output saved to: $outputFilePath"
-        } else {
-            Write-Error "ffmpeg process failed with exit code $LASTEXITCODE. Command attempted: ffmpeg $($ffmpegArgs -join ' '). Check the output above for specific ffmpeg error messages."
+            Write-Host "`n========================================" -ForegroundColor Green
+            Write-Host " Success! Completed in $elapsedTime" -ForegroundColor Green
+            Write-Host "========================================" -ForegroundColor Green
+            Write-Host "Output: $outputFilePath" -ForegroundColor White
+            
+            # Show file size comparison
+            $inputSize = [math]::Round($inputFileObject.Length / 1MB, 2)
+            $outputSize = [math]::Round((Get-Item -LiteralPath $outputFilePath).Length / 1MB, 2)
+            $reduction = [math]::Round((1 - ($outputSize / $inputSize)) * 100, 1)
+            
+            Write-Host "`nFile Size Comparison:" -ForegroundColor Cyan
+            Write-Host "  Original:  $inputSize MB" -ForegroundColor White
+            Write-Host "  Compressed: $outputSize MB" -ForegroundColor White
+            Write-Host "  Reduction:  $reduction%" -ForegroundColor $(if ($reduction -gt 0) { 'Green' } else { 'Yellow' })
+        }
+        else {
+            Write-Error "ffmpeg failed with exit code $LASTEXITCODE"
+            Write-Host "Command attempted: ffmpeg $($ffmpegArgs -join ' ')" -ForegroundColor Red
         }
     }
     catch {
-        Write-Error "A PowerShell error occurred while trying to run ffmpeg: $($_.Exception.Message)"
+        Write-Error "Error executing ffmpeg: $($_.Exception.Message)"
     }
-} # End foreach loop
+}
 
-Write-Host "Script finished."
+Write-Host "`n========================================" -ForegroundColor Yellow
+Write-Host "All files processed!" -ForegroundColor Yellow
+Write-Host "========================================" -ForegroundColor Yellow
