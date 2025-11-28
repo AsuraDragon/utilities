@@ -1,101 +1,4 @@
-﻿<#
-.SYNOPSIS
-Compresses video files using ffmpeg with optional NVIDIA or AMD hardware acceleration.
-
-.DESCRIPTION
-This script compresses video files using ffmpeg with support for:
-- CPU encoding (default - libx264)
-- NVIDIA GPU acceleration (NVENC - h264_nvenc)
-- AMD GPU acceleration (AMF - h264_amf)
-
-Hardware acceleration is disabled by default. Use -UseNVIDIA or -UseAMD flags to enable.
-The script handles both single files and directories (first level only).
-Compressed videos are saved to a "compressedVideos" subfolder.
-
-.PARAMETER InputFilePath
-The full path to the input video file or directory containing video files. (Mandatory)
-
-.PARAMETER UseNVIDIA
-Switch to enable NVIDIA GPU hardware acceleration using NVENC encoder.
-Requires compatible NVIDIA GPU with NVENC support.
-
-.PARAMETER UseAMD
-Switch to enable AMD GPU hardware acceleration using AMF encoder.
-Requires compatible AMD GPU with AMF support.
-
-.PARAMETER OutputSuffix
-String to append to the original filename (before extension) for the output file.
-Defaults to '_compressed'.
-
-.PARAMETER CRF
-Constant Rate Factor (quality level) for CPU encoding only.
-Lower values = higher quality/larger files. Range: 17-51.
-Defaults to 18 (high quality). NOT used with GPU encoding.
-
-.PARAMETER QP
-Quantization Parameter for GPU encoding (NVIDIA/AMD).
-Lower values = higher quality/larger files. Range: 0-51.
-Defaults to 23 (balanced quality). NOT used with CPU encoding.
-
-.PARAMETER Preset
-Encoding speed preset.
-CPU (libx264): ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-NVIDIA (NVENC): p1-p7 or fast, medium, slow (p7/slow = best quality)
-AMD (AMF): speed, balanced, quality (quality = best)
-Defaults to 'slower' for CPU, 'slow' for NVIDIA, 'quality' for AMD.
-
-.PARAMETER Bitrate
-Target video bitrate for GPU encoding (e.g., '5M', '10M').
-Optional - uses QP-based encoding if not specified.
-
-.PARAMETER AudioBitrate
-Target bitrate for the audio stream (e.g., '128k', '192k').
-Defaults to '128k'.
-
-.PARAMETER EnableHWAccelDecode
-Switch to enable hardware-accelerated decoding (keeps frames in GPU memory).
-Only applicable when using -UseNVIDIA or -UseAMD.
-Recommended for best performance with GPU encoding.
-
-.EXAMPLE
-# CPU encoding (default, high quality)
-.\Compress-Video.ps1 -InputFilePath "C:\Videos\sample.mp4"
-
-.EXAMPLE
-# NVIDIA GPU encoding with hardware decode
-.\Compress-Video.ps1 -InputFilePath "C:\Videos\sample.mp4" -UseNVIDIA -EnableHWAccelDecode
-
-.EXAMPLE
-# AMD GPU encoding with custom QP
-.\Compress-Video.ps1 -InputFilePath "C:\Videos\" -UseAMD -QP 20 -EnableHWAccelDecode
-
-.EXAMPLE
-# NVIDIA GPU with bitrate control
-.\Compress-Video.ps1 -InputFilePath "C:\Videos\sample.mp4" -UseNVIDIA -Bitrate "10M" -Preset medium
-
-.EXAMPLE
-# CPU encoding with custom CRF and preset
-.\Compress-Video.ps1 -InputFilePath "C:\Videos\sample.mp4" -CRF 20 -Preset medium
-
-.NOTES
-Author: AI Assistant (Enhanced)
-Version: 2.0 (Added NVIDIA NVENC and AMD AMF hardware acceleration support)
-LastModified: 2025-11-17
-Requires: 
-  - ffmpeg installed and in system PATH
-  - For NVIDIA: Compatible GPU with NVENC support (Kepler or newer)
-  - For AMD: Compatible GPU with AMF support (GCN or newer)
-Execution Policy: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-
-Hardware Acceleration Notes:
-- NVIDIA NVENC: Uses dedicated hardware encoder, significantly faster than CPU
-- AMD AMF: Uses GPU encoder, faster than CPU with lower CPU usage
-- GPU encoders produce slightly larger files than CPU for same quality
-- Hardware decode (-EnableHWAccelDecode) keeps frames in GPU memory for best performance
-- QP values for GPU: 0 = lossless (huge files), 18-23 = high quality, 28+ = lower quality
-#>
-
-param(
+﻿param(
     [Parameter(Mandatory = $true, HelpMessage = "Path to the input video file or directory.")]
     [string]$InputFilePath,
 
@@ -193,52 +96,42 @@ if ([string]::IsNullOrEmpty($Preset)) {
         $Preset = 'slower'
     }
     elseif ($encodingMode -eq 'NVIDIA') {
-        $Preset = 'slow'  # NVIDIA preset (p7 equivalent, best quality)
+        $Preset = 'slow' 
     }
     else {
-        $Preset = 'quality'  # AMD preset (best quality)
+        $Preset = 'quality' 
     }
 }
 
 # Validate and map presets for GPU encoding
 if ($UseAMD) {
-    # AMD AMF only accepts: speed, balanced, quality
     $validAMDPresets = @('speed', 'balanced', 'quality')
     if ($Preset -notin $validAMDPresets) {
-        Write-Warning "Preset '$Preset' not valid for AMD AMF. Valid options: speed, balanced, quality"
-        Write-Host "Mapping to AMD equivalent..." -ForegroundColor Yellow
-        
-        # Map common presets to AMD equivalents
+        Write-Warning "Preset '$Preset' not valid for AMD AMF. Mapping to AMD equivalent..."
         switch -Regex ($Preset) {
             'fast|faster|veryfast|superfast|ultrafast' { $Preset = 'speed' }
             'medium' { $Preset = 'balanced' }
             'slow|slower|veryslow' { $Preset = 'quality' }
             default { $Preset = 'quality' }
         }
-        Write-Host "Using AMD preset: $Preset" -ForegroundColor Green
     }
 }
 elseif ($UseNVIDIA) {
-    # NVIDIA NVENC accepts: p1-p7 or fast, medium, slow, plus legacy presets
     $validNVIDIAPresets = @('fast', 'medium', 'slow', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 
         'default', 'hp', 'hq', 'll', 'llhp', 'llhq', 'lossless', 'losslesshp')
     if ($Preset -notin $validNVIDIAPresets) {
-        Write-Warning "Preset '$Preset' not optimal for NVIDIA NVENC. Recommended: p1-p7, fast, medium, or slow"
-        Write-Host "Mapping to NVIDIA equivalent..." -ForegroundColor Yellow
-        
-        # Map CPU presets to NVIDIA equivalents
+        Write-Warning "Preset '$Preset' not optimal for NVIDIA NVENC. Mapping to NVIDIA equivalent..."
         switch -Regex ($Preset) {
             'ultrafast|superfast|veryfast' { $Preset = 'fast' }
             'faster' { $Preset = 'medium' }
-            'slow|slower|veryslow' { $Preset = 'slow' }  # or 'p7' for max quality
+            'slow|slower|veryslow' { $Preset = 'slow' }
             default { $Preset = 'medium' }
         }
-        Write-Host "Using NVIDIA preset: $Preset" -ForegroundColor Green
     }
 }
 
 # Define supported video file extensions
-$supportedExtensions = @('.mp4', '.mkv', '.mov', '.avi', '.wmv', '.flv', '.webm', '.m4v')
+$supportedExtensions = @('.mp4', '.mkv', '.mov', '.avi', '.wmv', '.flv', '.webm', '.m4v', '.ts', '.m2ts')
 
 # --- Build File List ---
 $inputFileList = @()
@@ -276,7 +169,6 @@ foreach ($inputFileObject in $inputFileList) {
     if (-not (Test-Path -LiteralPath $outputDir -PathType Container)) {
         try {
             New-Item -ItemType Directory -Path $outputDir -Force -ErrorAction Stop | Out-Null
-            Write-Verbose "Created directory: '$outputDir'"
         }
         catch {
             Write-Error "Failed to create output directory: $($_.Exception.Message)"
@@ -284,8 +176,9 @@ foreach ($inputFileObject in $inputFileList) {
         }
     }
 
-    # Construct output file path
-    $outputFileName = "$($inputFileObject.BaseName)$($OutputSuffix)$($inputFileObject.Extension)"
+    # Construct output file path - FORCE .mp4 EXTENSION
+    # This fixes issues where input is FLV/AVI but we are encoding h264 (which prefers mp4)
+    $outputFileName = "$($inputFileObject.BaseName)$($OutputSuffix).mp4"
     $outputFilePath = Join-Path -Path $outputDir -ChildPath $outputFileName
 
     # Check if output exists
@@ -296,42 +189,33 @@ foreach ($inputFileObject in $inputFileList) {
     # --- Build ffmpeg Arguments ---
     $ffmpegArgs = @()
 
-    # Hardware-accelerated decoding (if enabled for GPU encoding)
+    # Hardware-accelerated decoding
     if ($EnableHWAccelDecode) {
         if ($UseNVIDIA) {
-            # NVIDIA: Use CUDA hardware acceleration for decoding
             $ffmpegArgs += '-hwaccel', 'cuda'
             $ffmpegArgs += '-hwaccel_output_format', 'cuda'
             Write-Host "Hardware decode: CUDA (NVDEC)" -ForegroundColor Green
         }
         elseif ($UseAMD) {
-            # AMD: Use D3D11VA for Windows (most compatible)
             $ffmpegArgs += '-hwaccel', 'd3d11va'
             $ffmpegArgs += '-hwaccel_output_format', 'd3d11'
             Write-Host "Hardware decode: D3D11VA (AMD VCN)" -ForegroundColor Green
-        }
-        else {
-            Write-Warning "Hardware decode only available with -UseNVIDIA or -UseAMD"
         }
     }
 
     # Input file
     $ffmpegArgs += '-i', $inputFileObject.FullName
 
-    # Video codec and quality settings
+    # Video codec
     $ffmpegArgs += '-c:v', $videoCodec
 
     if ($encodingMode -eq 'CPU') {
-        # CPU encoding with CRF
         $ffmpegArgs += '-crf', $CRF.ToString()
         $ffmpegArgs += '-preset', $Preset
     }
     else {
-        # GPU encoding
         $ffmpegArgs += '-preset', $Preset
-        
         if ([string]::IsNullOrEmpty($Bitrate)) {
-            # Use QP-based quality control (constant quality)
             if ($UseNVIDIA) {
                 $ffmpegArgs += '-rc', 'constqp'
                 $ffmpegArgs += '-qp', $QP.ToString()
@@ -343,14 +227,9 @@ foreach ($inputFileObject in $inputFileList) {
             }
         }
         else {
-            # Use bitrate control (VBR)
             $ffmpegArgs += '-b:v', $Bitrate
-            if ($UseNVIDIA) {
-                $ffmpegArgs += '-rc', 'vbr'
-            }
-            elseif ($UseAMD) {
-                $ffmpegArgs += '-rc', 'vbr_peak'
-            }
+            if ($UseNVIDIA) { $ffmpegArgs += '-rc', 'vbr' }
+            elseif ($UseAMD) { $ffmpegArgs += '-rc', 'vbr_peak' }
         }
     }
 
@@ -358,6 +237,11 @@ foreach ($inputFileObject in $inputFileList) {
     $ffmpegArgs += '-c:a', 'aac'
     $ffmpegArgs += '-b:a', $AudioBitrate
 
+    # --- FIX: Error Handling Args ---
+    # Fixes "Packets poorly interleaved" / "Negative timestamp" errors
+    # Fixes muxing errors when converting from legacy containers like FLV
+    $ffmpegArgs += '-max_interleave_delta', '0'
+    
     # MP4 optimization
     $ffmpegArgs += '-movflags', '+faststart'
 
@@ -367,30 +251,15 @@ foreach ($inputFileObject in $inputFileList) {
     # --- Display Settings ---
     Write-Host "`nSettings:" -ForegroundColor Cyan
     Write-Host "  Encoding Mode:  $encodingMode" -ForegroundColor White
-    Write-Host "  Video Codec:    $videoCodec" -ForegroundColor White
-    Write-Host "  Preset:         $Preset" -ForegroundColor White
+    Write-Host "  Container:      MP4 (Forced for stability)" -ForegroundColor White
     
-    if ($encodingMode -eq 'CPU') {
-        Write-Host "  CRF:            $CRF" -ForegroundColor White
-    }
-    else {
-        if ([string]::IsNullOrEmpty($Bitrate)) {
-            Write-Host "  QP:             $QP (constant quality)" -ForegroundColor White
-        }
-        else {
-            Write-Host "  Bitrate:        $Bitrate (variable bitrate)" -ForegroundColor White
-        }
-    }
-    
-    Write-Host "  Audio Bitrate:  $AudioBitrate" -ForegroundColor White
-    Write-Host "  HW Decode:      $(if ($EnableHWAccelDecode) { 'Enabled' } else { 'Disabled' })" -ForegroundColor White
-    Write-Host ""
-
     # --- Execute ffmpeg ---
     Write-Host "Encoding..." -ForegroundColor Yellow
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
     try {
+        # Redirect StandardError to capture ffmpeg output cleanly if needed, 
+        # but simpler to let it flow to console for progress bar visibility
         & ffmpeg $ffmpegArgs
 
         $stopwatch.Stop()
@@ -399,7 +268,6 @@ foreach ($inputFileObject in $inputFileList) {
         if ($LASTEXITCODE -eq 0) {
             Write-Host "`n========================================" -ForegroundColor Green
             Write-Host "✓ Success! Completed in $elapsedTime" -ForegroundColor Green
-            Write-Host "========================================" -ForegroundColor Green
             Write-Host "Output: $outputFilePath" -ForegroundColor White
             
             # Show file size comparison
