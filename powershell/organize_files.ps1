@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
-    Organizes files based on naming conventions. 
-    Refactored for maximum compatibility (ASCII only) to prevent console crashes.
+    Organizes files based on keywords and grouping patterns.
+    - Default behavior: Tree View Preview (Safe Mode).
+    - Use -Execute to actually move files.
 #>
 [CmdletBinding()]
 param (
@@ -9,43 +10,80 @@ param (
     [switch]$Execute
 )
 
-# 0. CONFIGURATION & SAFETY
-# Force the console to use UTF-8, just in case, but we will use ASCII visuals to be safe.
-try {
-    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-}
-catch {
-    # If this fails, we ignore it and rely on the ASCII characters below.
-}
+# 0. SAFETY: Force UTF-8 but use ASCII visuals to prevent crashes
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 # ==========================================
 # 1. CORE LOGIC (STRATEGY)
 # ==========================================
 
-function Get-TargetFolder {
-    param ([string]$FileName)
-
-    $keywordPattern = "^(.+?)(_post_|_feed_|_story_|_reel_|_stories_|_highlights_)"
-
-    if ($FileName -match $keywordPattern) { return $matches[1] }
-    if ($FileName -match "_") { return "Uncategorized\splitted" }
-    return "Uncategorized\toBeReviewed"
+function Get-Prefix {
+    param ($FileName)
+    # Extracts text before the first underscore
+    if ($FileName -match "^(.+?)_") { return $matches[1] }
+    return $FileName
 }
 
-function Get-ExecutionPlan {
+function Build-ExecutionPlan {
     param ([string]$Path)
+    
     $files = Get-ChildItem -Path $Path -File
     $plan = @{}
+    
+    # We need a temporary holding area for files that *might* be grouped
+    $splitCandidates = [System.Collections.ArrayList]::new()
+    
+    $keywordPattern = "^(.+?)(_post_|_feed_|_story_|_reel_|_stories_|_highlights_)"
 
+    # --- PASS 1: Filter Keywords vs Candidates ---
     foreach ($file in $files) {
         if ($file.Name -eq $MyInvocation.MyCommand.Name) { continue }
-        $target = Get-TargetFolder -FileName $file.Name
-        if (-not $plan.ContainsKey($target)) {
-            $plan[$target] = [System.Collections.ArrayList]::new()
+
+        # Priority 1: Specific Keywords
+        if ($file.Name -match $keywordPattern) {
+            $folderName = $matches[1]
+            AddTo-Plan -Plan $plan -Folder $folderName -File $file
         }
-        [void]$plan[$target].Add($file)
+        # Priority 2: Has Underscore (Add to candidates for Pass 2)
+        elseif ($file.Name -match "_") {
+            [void]$splitCandidates.Add($file)
+        }
+        # Priority 3: No Underscore (Review)
+        else {
+            AddTo-Plan -Plan $plan -Folder "Uncategorized\toBeReviewed" -File $file
+        }
     }
+
+    # --- PASS 2: Analyze Candidates for Grouping ---
+    # Group the candidates by the part before the first underscore
+    $groupedFiles = $splitCandidates | Group-Object -Property { Get-Prefix $_.Name }
+
+    foreach ($group in $groupedFiles) {
+        if ($group.Count -ge 2) {
+            # If 2 or more files share a prefix, create a specific folder
+            # e.g. "Uncategorized\splitted\ProjectA"
+            $targetFolder = "Uncategorized\splitted\$($group.Name)"
+        }
+        else {
+            # If unique, just throw in the general bin
+            $targetFolder = "Uncategorized\splitted"
+        }
+
+        foreach ($file in $group.Group) {
+            AddTo-Plan -Plan $plan -Folder $targetFolder -File $file
+        }
+    }
+
     return $plan
+}
+
+# Helper to keep code clean
+function AddTo-Plan {
+    param ($Plan, $Folder, $File)
+    if (-not $Plan.ContainsKey($Folder)) {
+        $Plan[$Folder] = [System.Collections.ArrayList]::new()
+    }
+    [void]$Plan[$Folder].Add($File)
 }
 
 # ==========================================
@@ -54,21 +92,21 @@ function Get-ExecutionPlan {
 
 function Show-TreePreview {
     param ($Plan)
-    
     Write-Host "`n--- PREVIEW MODE: TREE VIEW (Default) ---" -ForegroundColor Cyan
     Write-Host "No files are being moved. Use -Execute to proceed.`n" -ForegroundColor Gray
 
     if ($Plan.Count -eq 0) { Write-Host "No files found to organize." -ForegroundColor Yellow; return }
 
-    foreach ($folder in $Plan.Keys) {
-        # Using [DIR] instead of emoji to prevent crash
+    # Sort keys so output is tidy
+    $sortedFolders = $Plan.Keys | Sort-Object
+
+    foreach ($folder in $sortedFolders) {
         Write-Host "[DIR] $folder" -ForegroundColor Yellow
         $fileList = $Plan[$folder]
         $count = 0
         
         foreach ($file in $fileList) {
             $count++
-            # Using standard pipes and dashes instead of Box Drawing characters
             $prefix = if ($count -eq $fileList.Count) { "   +--" } else { "   |--" }
             Write-Host "$prefix $($file.Name)" -ForegroundColor White
         }
@@ -80,7 +118,7 @@ function Show-FolderPreview {
     Write-Host "`n--- PREVIEW MODE: FOLDER LIST ---" -ForegroundColor Cyan
     if ($Plan.Count -eq 0) { Write-Host "No files found." -ForegroundColor Yellow; return }
 
-    foreach ($folder in $Plan.Keys) {
+    foreach ($folder in $Plan.Keys | Sort-Object) {
         Write-Host "[DIR] $folder" -ForegroundColor Yellow
     }
 }
@@ -112,7 +150,7 @@ function Invoke-FileMove {
 # ==========================================
 
 $currentPath = Get-Location
-$plan = Get-ExecutionPlan -Path $currentPath
+$plan = Build-ExecutionPlan -Path $currentPath
 
 if ($Execute) {
     Invoke-FileMove -Plan $plan -RootPath $currentPath
