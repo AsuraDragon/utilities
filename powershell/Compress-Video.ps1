@@ -8,6 +8,9 @@
     [Parameter(HelpMessage = "Enable AMD GPU hardware acceleration (AMF).")]
     [switch]$UseAMD,
 
+    [Parameter(HelpMessage = "Use all CPU cores minus one for encoding.")]
+    [switch]$UseMaxCores,
+
     [Parameter(HelpMessage = "Suffix for the output filename (before extension).")]
     [string]$OutputSuffix = '_compressed',
 
@@ -212,6 +215,15 @@ foreach ($inputFileObject in $inputFileList) {
     if ($encodingMode -eq 'CPU') {
         $ffmpegArgs += '-crf', $CRF.ToString()
         $ffmpegArgs += '-preset', $Preset
+        
+        # Add thread control for CPU encoding
+        if ($UseMaxCores) {
+            $cpuCores = (Get-CimInstance -ClassName Win32_Processor | 
+                Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+            $threadsToUse = [Math]::Max(1, $cpuCores - 2)
+            $ffmpegArgs += '-threads', $threadsToUse.ToString()
+            Write-Host "CPU Threads: Using $threadsToUse of $cpuCores available cores" -ForegroundColor Green
+        }
     }
     else {
         $ffmpegArgs += '-preset', $Preset
@@ -256,7 +268,7 @@ foreach ($inputFileObject in $inputFileList) {
     # --- Execute ffmpeg ---
     Write-Host "Encoding..." -ForegroundColor Yellow
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-
+    Write-Host "Command: $ffmpegArgs"  -ForegroundColor White
     try {
         # Redirect StandardError to capture ffmpeg output cleanly if needed, 
         # but simpler to let it flow to console for progress bar visibility
