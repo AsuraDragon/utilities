@@ -1,3 +1,16 @@
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function scrollDown() {
+    const originalHeight = document.body.scrollHeight;
+    window.scrollTo(0, document.body.scrollHeight);
+    return originalHeight;
+}
+
+async function awaitAndIncreaseTime(waitTime) {
+    await sleep(waitTime);
+    return waitTime;
+}
+
 /**
  * Scrapes a page by scrolling to the bottom, then executing a callback.
  * @param {Function} fn - The function to execute after scrolling (or during).
@@ -14,25 +27,28 @@ async function scrapeTikTokMedia(fn, where = null) {
     }
 
     console.log("Starting Scroller...");
-    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const TIMEOUT = 10000;
-
+    const MAX_RETRIES = 3;
     while (true) {
-        const previousHeight = document.body.scrollHeight;
-        window.scrollTo(0, document.body.scrollHeight);
+        let previousHeight = scrollDown();
 
         // Wait for height change
         let heightChanged = false;
         let waittime = 0;
         const checkInterval = 500;
-
+        let currentRetry = 0;
         while (waittime < TIMEOUT) {
-            await sleep(checkInterval);
-            waittime += checkInterval;
+            waittime += await awaitAndIncreaseTime(checkInterval);
 
             if (document.body.scrollHeight > previousHeight) {
                 heightChanged = true;
                 break;
+            }
+
+            if (currentRetry < MAX_RETRIES) {
+                waittime += await awaitAndIncreaseTime(checkInterval);
+                previousHeight = scrollDown();
+                currentRetry += 1;
             }
         }
 
